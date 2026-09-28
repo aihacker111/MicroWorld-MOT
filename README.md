@@ -142,8 +142,9 @@ appropriate before distributing a combined application or commercial model.
 ## Download and COCO conversion
 
 Review and accept the official terms linked in `docs/DATASETS.md`, then install
-the small dataset utility extra and run the resumable downloader. Set
-`DATA_ROOT` to a disk with ample free space:
+the small dataset utility extra and run the resumable train/validation
+downloader. Set `DATA_ROOT` to a disk with ample free space. DanceTrack test1
+and test2 and the two VisDrone test splits are intentionally not downloaded:
 
 ```bash
 python -m pip install -e '.[datasets]'
@@ -165,7 +166,7 @@ python tools/convert_tracking_to_coco.py \
   --dataset mot17 \
   --root /datasets/MOT17 \
   --output /datasets/coco/mot17 \
-  --splits train test \
+  --splits train \
   --category-mode person
 ```
 

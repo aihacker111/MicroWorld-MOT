@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Resumable downloader for the official DanceTrack, MOT16, MOT17 and
-# VisDrone-MOT archives. Dataset terms still apply; this script does not
-# redistribute or mirror any data.
+# Resumable train/validation downloader for the official DanceTrack, MOT16,
+# MOT17 and VisDrone-MOT archives. Dataset terms still apply; this script does
+# not redistribute or mirror any data.
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA_ROOT="${DATA_ROOT:-${PROJECT_ROOT}/data/raw}"
@@ -16,10 +16,10 @@ Usage:
   ACCEPT_DATASET_TERMS=1 bash scripts/download_datasets.sh [all|DATASET ...]
 
 Datasets:
-  dancetrack  DanceTrack train/val/test from the official Hugging Face repo
-  mot16       MOTChallenge MOT16 train/test
-  mot17       MOTChallenge MOT17 train/test
-  visdrone    VisDrone2019-MOT train/val/test-dev/test-challenge
+  dancetrack  DanceTrack train1/train2/val from the official Hugging Face repo
+  mot16       MOTChallenge MOT16 archive (use train sequences for train/val)
+  mot17       MOTChallenge MOT17 archive (use train sequences for train/val)
+  visdrone    VisDrone2019-MOT train/val
 
 Environment variables:
   DATA_ROOT=/path          Extraction root (default: PROJECT/data/raw)
@@ -103,7 +103,7 @@ extract_zip() {
 download_dancetrack() {
   local destination="${DATA_ROOT}/DanceTrack"
   local part
-  for part in train1 train2 val test1 test2; do
+  for part in train1 train2 val; do
     local archive="${ARCHIVE_ROOT}/DanceTrack/${part}.zip"
     download_url \
       "https://huggingface.co/datasets/noahcao/dancetrack/resolve/main/${part}.zip?download=true" \
@@ -126,12 +126,10 @@ download_mot17() {
 
 download_visdrone() {
   local destination="${DATA_ROOT}/VisDrone"
-  local names=(train val test-dev test-challenge)
+  local names=(train val)
   local ids=(
     "1-qX2d-P1Xr64ke6nTdlm33om1VxCUTSh"
     "1rqnKe9IgU_crMaxRoel9_nuUsMEBBVQu"
-    "14z8Acxopj1d86-qhsF1NwS4Bv3KYa4Wu"
-    "1I0nn6dVKctzDE5YJ3q9qOlhKLiSIDAxF"
   )
   local index
   for index in "${!names[@]}"; do

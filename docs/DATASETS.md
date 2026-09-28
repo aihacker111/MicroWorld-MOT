@@ -20,7 +20,10 @@ ACCEPT_DATASET_TERMS=1 DATA_ROOT=/datasets \
 ```
 
 The script uses `curl --continue-at -` for HTTP downloads and `gdown
---continue` for VisDrone. Archives stay under `/datasets/.archives` by default,
+--continue` for VisDrone. It downloads only DanceTrack train1/train2/val and
+VisDrone train/val; their test archives are intentionally skipped. MOT16/17
+use the official benchmark archives, with train sequences split locally into
+training and validation. Archives stay under `/datasets/.archives` by default,
 so an interrupted run can resume. Set `KEEP_ARCHIVES=0` only if you want each
 archive removed after successful extraction.
 
@@ -32,11 +35,11 @@ the official nested layout automatically:
 ```bash
 python tools/convert_tracking_to_coco.py \
   --dataset dancetrack --root /datasets/DanceTrack \
-  --output /datasets/coco/dancetrack --splits train val test
+  --output /datasets/coco/dancetrack --splits train val
 
 python tools/convert_tracking_to_coco.py \
   --dataset visdrone --root /datasets/VisDrone \
-  --output /datasets/coco/visdrone --splits train val test-dev \
+  --output /datasets/coco/visdrone --splits train val \
   --category-mode native
 ```
 
