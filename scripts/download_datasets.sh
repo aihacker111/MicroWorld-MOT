@@ -22,9 +22,10 @@ Datasets:
   visdrone    VisDrone2019-MOT train/val
 
 Environment variables:
-  DATA_ROOT=/path          Extraction root (default: PROJECT/data/raw)
+  DATA_ROOT=/path          Optional override (default: <repository>/data/raw)
   ARCHIVE_ROOT=/path       Archive cache (default: DATA_ROOT/.archives)
   KEEP_ARCHIVES=0|1        Remove archives after extraction (default: 1)
+  DANCETRACK_PARTS="..."   Optional subset: train1 train2 val
 
 The full set is large. Downloads are resumable and existing extracted files
 are not overwritten.
@@ -102,8 +103,16 @@ extract_zip() {
 
 download_dancetrack() {
   local destination="${DATA_ROOT}/DanceTrack"
+  local requested_parts="${DANCETRACK_PARTS:-train1 train2 val}"
   local part
-  for part in train1 train2 val; do
+  for part in ${requested_parts}; do
+    case "${part}" in
+      train1|train2|val) ;;
+      *)
+        echo "Unknown DanceTrack part: ${part}; expected train1, train2 or val" >&2
+        exit 2
+        ;;
+    esac
     local archive="${ARCHIVE_ROOT}/DanceTrack/${part}.zip"
     download_url \
       "https://huggingface.co/datasets/noahcao/dancetrack/resolve/main/${part}.zip?download=true" \
@@ -166,6 +175,7 @@ for requested in "$@"; do
   esac
 done
 
+echo "Repository root: ${PROJECT_ROOT}"
 echo "Dataset root: ${DATA_ROOT}"
 echo "Archive cache: ${ARCHIVE_ROOT}"
 df -h "${DATA_ROOT}" | tail -n 1 || true

@@ -148,24 +148,26 @@ and test2 and the two VisDrone test splits are intentionally not downloaded:
 
 ```bash
 python -m pip install -e '.[datasets]'
-ACCEPT_DATASET_TERMS=1 DATA_ROOT=/datasets \
-  bash scripts/download_datasets.sh all
+ACCEPT_DATASET_TERMS=1 bash scripts/download_datasets.sh all
 ```
 
 One or more datasets can be selected instead of `all`, for example:
 
 ```bash
-ACCEPT_DATASET_TERMS=1 DATA_ROOT=/datasets \
-  bash scripts/download_datasets.sh dancetrack mot17
+ACCEPT_DATASET_TERMS=1 bash scripts/download_datasets.sh dancetrack mot17
 ```
+
+By default, data is stored under `data/raw` inside this repository, so it stays
+on the same filesystem as the checkout. Set `DATA_ROOT` only when intentionally
+using a different mounted disk.
 
 Convert extracted tracking annotations to video-aware COCO JSON:
 
 ```bash
 python tools/convert_tracking_to_coco.py \
   --dataset mot17 \
-  --root /datasets/MOT17 \
-  --output /datasets/coco/mot17 \
+  --root data/raw/MOT17 \
+  --output data/coco/mot17 \
   --splits train \
   --category-mode person
 ```
@@ -186,10 +188,10 @@ The project does not bypass dataset agreements or redistribute images.
 Expected roots:
 
 ```text
-/datasets/DanceTrack/dancetrack/{train,val}/<sequence>/{img1,gt}
-/datasets/MOT17/train/MOT17-xx-*/{img1,gt,det}
-/datasets/MOT16/train/MOT16-xx/{img1,gt,det}
-/datasets/VisDrone/VisDrone2019-MOT-{train,val}/{sequences,annotations}
+data/raw/DanceTrack/dancetrack/{train,val}/<sequence>/{img1,gt}
+data/raw/MOT17/train/MOT17-xx-*/{img1,gt,det}
+data/raw/MOT16/train/MOT16-xx/{img1,gt,det}
+data/raw/VisDrone/VisDrone2019-MOT-{train,val}/{sequences,annotations}
 ```
 
 Edit the four roots at the top of the provided script, then run:
@@ -205,7 +207,7 @@ are assembled. To prepare one split manually:
 ```bash
 python tools/prepare_real_data.py \
   --format mot \
-  --root /datasets/DanceTrack/dancetrack/train \
+  --root data/raw/DanceTrack/dancetrack/train \
   --dataset-name dancetrack \
   --output data/clips/dancetrack/train \
   --cache data/detector_cache/dancetrack/train \

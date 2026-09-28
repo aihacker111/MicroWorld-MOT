@@ -15,17 +15,26 @@ that you have reviewed the dataset terms, and choose a sufficiently large disk:
 
 ```bash
 python -m pip install -e '.[datasets]'
-ACCEPT_DATASET_TERMS=1 DATA_ROOT=/datasets \
-  bash scripts/download_datasets.sh all
+ACCEPT_DATASET_TERMS=1 bash scripts/download_datasets.sh all
 ```
 
 The script uses `curl --continue-at -` for HTTP downloads and `gdown
 --continue` for VisDrone. It downloads only DanceTrack train1/train2/val and
 VisDrone train/val; their test archives are intentionally skipped. MOT16/17
 use the official benchmark archives, with train sequences split locally into
-training and validation. Archives stay under `/datasets/.archives` by default,
+training and validation. Archives stay under `data/raw/.archives` by default,
 so an interrupted run can resume. Set `KEEP_ARCHIVES=0` only if you want each
 archive removed after successful extraction.
+
+The default root is `<repository>/data/raw`. For example, when the repository
+is `/media/hung/HDD/workplaces/tin/cvpr2027/MicroWorld-MOT`, the resolved data
+root is `/media/hung/HDD/workplaces/tin/cvpr2027/MicroWorld-MOT/data/raw`.
+Do not export `DATA_ROOT=/home/...` when the home partition is not the intended
+storage device.
+
+To resume only one DanceTrack archive after moving a partial download, set for
+example `DANCETRACK_PARTS=val`; accepted values are `train1`, `train2`, `val`,
+or a space-separated combination.
 
 ## COCO conversion
 
@@ -34,12 +43,12 @@ the official nested layout automatically:
 
 ```bash
 python tools/convert_tracking_to_coco.py \
-  --dataset dancetrack --root /datasets/DanceTrack \
-  --output /datasets/coco/dancetrack --splits train val
+  --dataset dancetrack --root data/raw/DanceTrack \
+  --output data/coco/dancetrack --splits train val
 
 python tools/convert_tracking_to_coco.py \
-  --dataset visdrone --root /datasets/VisDrone \
-  --output /datasets/coco/visdrone --splits train val \
+  --dataset visdrone --root data/raw/VisDrone \
+  --output data/coco/visdrone --splits train val \
   --category-mode native
 ```
 
