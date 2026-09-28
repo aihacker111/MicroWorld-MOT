@@ -67,6 +67,7 @@ class TrainConfig:
     target_ema_decay: float = 0.996
     gradient_accumulation: int = 1
     detach_interval: int = 4
+    log_interval: int = 20
 
 
 @dataclass

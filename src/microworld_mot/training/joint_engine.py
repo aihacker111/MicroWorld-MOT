@@ -329,6 +329,48 @@ def _balanced_sampler(dataset) -> WeightedRandomSampler | None:
     return WeightedRandomSampler(weights, num_samples=len(weights), replacement=True)
 
 
+def _format_duration(seconds: float) -> str:
+    seconds = max(0, round(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _iteration_status(
+    *,
+    epoch: int,
+    epochs: int,
+    iteration: int,
+    iterations: int,
+    metrics: dict[str, Tensor],
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+    elapsed: float,
+) -> str:
+    eta = elapsed / max(1, iteration) * max(0, iterations - iteration)
+    world_lr = next(
+        (
+            float(group["lr"])
+            for group in optimizer.param_groups
+            if group.get("name") == "world"
+        ),
+        float(optimizer.param_groups[-1]["lr"]),
+    )
+    memory = ""
+    if device.type == "cuda":
+        allocated = torch.cuda.memory_allocated(device) / 1024**3
+        peak = torch.cuda.max_memory_allocated(device) / 1024**3
+        memory = f" vram={allocated:.1f}/{peak:.1f}G"
+    return (
+        f"epoch={epoch + 1:03d}/{epochs:03d} "
+        f"iter={iteration:05d}/{iterations:05d} "
+        f"loss={float(metrics['loss'].detach()):.4f} "
+        f"det={float(metrics['detector'].detach()):.4f} "
+        f"world={float(metrics['world_loss'].detach()):.4f} "
+        f"lr_world={world_lr:.2e}{memory} eta={_format_duration(eta)}"
+    )
+
+
 def train_joint(config: ExperimentConfig) -> Path:
     if not config.joint.enabled or config.data.kind != "joint_raw":
         raise ValueError("Joint training requires joint.enabled=true and data.kind='joint_raw'")
@@ -391,6 +433,9 @@ def train_joint(config: ExperimentConfig) -> Path:
 
     history_path = output_dir / "history.jsonl"
     accumulation = config.train.gradient_accumulation
+    log_interval = config.train.log_interval
+    if log_interval < 0:
+        raise ValueError("train.log_interval must be >= 0")
     for epoch in range(start_epoch, config.train.epochs):
         system.train()
         perception.train()
@@ -421,6 +466,26 @@ def train_joint(config: ExperimentConfig) -> Path:
             for key, value in metrics.items():
                 totals[key] += float(value.detach())
             batches += 1
+            iteration = batch_index + 1
+            should_log = log_interval > 0 and (
+                iteration == 1
+                or iteration % log_interval == 0
+                or iteration == len(train_loader)
+            )
+            if should_log:
+                print(
+                    _iteration_status(
+                        epoch=epoch,
+                        epochs=config.train.epochs,
+                        iteration=iteration,
+                        iterations=len(train_loader),
+                        metrics=metrics,
+                        optimizer=optimizer,
+                        device=device,
+                        elapsed=time.perf_counter() - started,
+                    ),
+                    flush=True,
+                )
 
         train_metrics = {key: value / max(1, batches) for key, value in totals.items()}
         val_metrics = evaluate_joint_epoch(

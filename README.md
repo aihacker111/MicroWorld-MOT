@@ -153,6 +153,8 @@ backpropagation every two frames and four-step gradient accumulation. If CUDA
 runs out of memory, first set `data.image_size=512`; do not freeze YOLO or add
 an epoch-stage schedule. The checkpoint contains both `model` (world/tracker)
 and `joint_perception` (YOLO11, ROI projections and prior gates).
+Training progress is printed on the first, last and every 20th iteration. Change
+this with `--set train.log_interval=10`, or set it to `0` to keep epoch-only logs.
 
 During training, public GT boxes define positive ROI proposals and association
 labels, while the official YOLO detection objective trains the detector on the
