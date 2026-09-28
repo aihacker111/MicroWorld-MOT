@@ -103,9 +103,13 @@ def cache_sequence_detections(
     perception: YOLO11Perception,
     detector_source: str,
     overwrite: bool = False,
+    inference_batch_size: int = 8,
 ) -> Path:
+    if inference_batch_size < 1:
+        raise ValueError("inference_batch_size must be positive")
     destination = Path(cache_root) / sequence.name
     destination.mkdir(parents=True, exist_ok=True)
+    pending: list[tuple[int, Path, Path]] = []
     for frame, image_path in enumerate(sequence.image_paths, start=1):
         cache_path = destination / f"{frame:06d}.npz"
         if cache_path.exists() and not overwrite:
@@ -118,28 +122,48 @@ def cache_sequence_detections(
                 f"{perception.feature_dim}, got {cached_feature_dim}. Rerun with "
                 "--overwrite-cache after changing the perception backbone."
             )
+        pending.append((frame, image_path, cache_path))
+
+    for start in range(0, len(pending), inference_batch_size):
+        batch = pending[start : start + inference_batch_size]
         if detector_source == "public":
-            rows = sequence.public_detections.get(frame, np.empty((0, 5), dtype=np.float32))
-            rows = rows[rows[:, 4] >= perception.score_threshold]
-            boxes_xyxy = xywh_to_xyxy(rows[:, :4]) if len(rows) else rows[:, :4]
-            scores = rows[:, 4] if len(rows) else np.empty(0, dtype=np.float32)
-            features = perception.encode_boxes(
-                image_path, torch.from_numpy(boxes_xyxy).float()
-            ).numpy()
-            labels = np.ones(len(rows), dtype=np.int64)
+            boxes_per_image: list[np.ndarray] = []
+            scores_per_image: list[np.ndarray] = []
+            for frame, _, _ in batch:
+                rows = sequence.public_detections.get(frame, np.empty((0, 5), dtype=np.float32))
+                rows = rows[rows[:, 4] >= perception.score_threshold]
+                boxes_per_image.append(xywh_to_xyxy(rows[:, :4]) if len(rows) else rows[:, :4])
+                scores_per_image.append(rows[:, 4] if len(rows) else np.empty(0, dtype=np.float32))
+            encoded = perception.encode_boxes_batch(
+                [image_path for _, image_path, _ in batch],
+                [torch.from_numpy(boxes).float() for boxes in boxes_per_image],
+            )
+            outputs = [
+                DetectorOutput(
+                    boxes_xyxy=torch.from_numpy(boxes).float(),
+                    scores=torch.from_numpy(scores).float(),
+                    labels=torch.ones(len(boxes), dtype=torch.long),
+                    features=features,
+                )
+                for boxes, scores, features in zip(
+                    boxes_per_image, scores_per_image, encoded, strict=True
+                )
+            ]
         else:
-            output = perception.detect(image_path)
+            outputs = perception.detect_batch([image_path for _, image_path, _ in batch])
+
+        for (_, _, cache_path), output in zip(batch, outputs, strict=True):
             boxes_xyxy = output.boxes_xyxy.numpy().astype(np.float32)
             scores = output.scores.numpy().astype(np.float32)
             labels = output.labels.numpy().astype(np.int64)
             features = output.features.numpy().astype(np.float32)
-        np.savez_compressed(
-            cache_path,
-            boxes_xyxy=boxes_xyxy,
-            scores=scores,
-            labels=labels,
-            features=features,
-        )
+            np.savez_compressed(
+                cache_path,
+                boxes_xyxy=boxes_xyxy,
+                scores=scores,
+                labels=labels,
+                features=features,
+            )
     return destination
 
 
@@ -202,6 +226,8 @@ def build_sequence_clips(
     min_track_frames: int = 2,
     detector_source: str = "unknown",
     score_threshold: float = -1.0,
+    reuse_frame_cache: bool = True,
+    compress_clips: bool = True,
 ) -> int:
     """Build detector-conditioned clips using GT-first, coverage-preserving sampling.
 
@@ -224,6 +250,30 @@ def build_sequence_clips(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     written = 0
+    prepared_frames: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = {}
+
+    def prepared_frame(frame_number: int):
+        if reuse_frame_cache and frame_number in prepared_frames:
+            return prepared_frames[frame_number]
+        frame_cache = _load_frame_cache(frame_cache_dir / f"{frame_number:06d}.npz")
+        order = frame_cache.scores.argsort(descending=True)[:max_detections]
+        selected_boxes = frame_cache.boxes_xyxy[order].numpy()
+        selected_scores = frame_cache.scores[order].numpy()
+        selected_features = frame_cache.features[order].numpy()
+        if selected_features.shape[-1] != feature_dim:
+            raise ValueError(
+                f"Cached feature dim {selected_features.shape[-1]} != requested {feature_dim}"
+            )
+        prepared = (
+            selected_boxes,
+            normalize_xyxy(selected_boxes, sequence.width, sequence.height),
+            selected_scores,
+            selected_features,
+        )
+        if reuse_frame_cache:
+            prepared_frames[frame_number] = prepared
+        return prepared
+
     stable_name_seed = zlib.crc32(sequence.name.encode("utf-8"))
     rng = np.random.default_rng(sampling_seed + stable_name_seed)
     latest_start = sequence.length - sequence_length + 1
@@ -302,21 +352,15 @@ def build_sequence_clips(
                         active_slots.append(slot)
                         gt_boxes_xyxy.append(box_xyxy)
 
-                frame_cache = _load_frame_cache(frame_cache_dir / f"{frame_number:06d}.npz")
-                order = frame_cache.scores.argsort(descending=True)[:detections]
-                selected_boxes = frame_cache.boxes_xyxy[order].numpy()
-                selected_scores = frame_cache.scores[order].numpy()
-                selected_features = frame_cache.features[order].numpy()
-                count = len(order)
-                if selected_features.shape[-1] != feature_dim:
-                    raise ValueError(
-                        f"Cached feature dim {selected_features.shape[-1]} "
-                        f"!= requested {feature_dim}"
-                    )
+                (
+                    selected_boxes,
+                    normalized_detection_boxes,
+                    selected_scores,
+                    selected_features,
+                ) = prepared_frame(frame_number)
+                count = len(selected_scores)
                 if count:
-                    detection_boxes[offset, :count] = normalize_xyxy(
-                        selected_boxes, sequence.width, sequence.height
-                    )
+                    detection_boxes[offset, :count] = normalized_detection_boxes
                     detection_features[offset, :count] = selected_features
                     detection_scores[offset, :count] = selected_scores
                     detection_valid[offset, :count] = True
@@ -342,7 +386,8 @@ def build_sequence_clips(
             clip_path = output_dir / (
                 f"{dataset_name}_{sequence.name}_{start:06d}_i{interval}_g{group_index:02d}.npz"
             )
-            np.savez_compressed(
+            save_clip = np.savez_compressed if compress_clips else np.savez
+            save_clip(
                 clip_path,
                 boxes=boxes,
                 slot_valid=slot_valid,
@@ -370,6 +415,7 @@ def build_sequence_clips(
                 score_threshold=np.asarray(score_threshold, dtype=np.float32),
                 detector_source=np.asarray(detector_source),
                 sampling_seed=np.asarray(sampling_seed),
+                clip_compressed=np.asarray(compress_clips),
                 protocol_version=np.asarray(2),
             )
             written += 1

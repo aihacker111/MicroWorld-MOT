@@ -12,6 +12,9 @@ MOT16_ROOT="${MOT16_ROOT:-${DATA_ROOT}/MOT16/train}"
 VISDRONE_ROOT="${VISDRONE_ROOT:-${DATA_ROOT}/VisDrone}"
 DEVICE="${DEVICE:-cuda:0}"
 DETECTOR="${DETECTOR:-yolo11n}"
+INFERENCE_BATCH_SIZE="${INFERENCE_BATCH_SIZE:-8}"
+CROP_BATCH_SIZE="${CROP_BATCH_SIZE:-128}"
+UNCOMPRESSED_CLIPS="${UNCOMPRESSED_CLIPS:-0}"
 
 cd "${PROJECT_ROOT}"
 
@@ -48,6 +51,7 @@ train_protocol=(
   --detector "${DETECTOR}" --device "${DEVICE}"
   --score-threshold 0.15 --iou-threshold 0.50
   --sequence-length 24 --stride 8
+  --inference-batch-size "${INFERENCE_BATCH_SIZE}" --crop-batch-size "${CROP_BATCH_SIZE}"
   --temporal-intervals 1,2,4 --sampling-seed 7
   --min-track-frames 2 --max-tracks 96 --max-detections 192
   --estimate-camera-motion --overwrite-clips
@@ -56,10 +60,15 @@ val_protocol=(
   --detector "${DETECTOR}" --device "${DEVICE}"
   --score-threshold 0.15 --iou-threshold 0.50
   --sequence-length 24 --stride 8
+  --inference-batch-size "${INFERENCE_BATCH_SIZE}" --crop-batch-size "${CROP_BATCH_SIZE}"
   --temporal-intervals 1 --sampling-seed 7
   --min-track-frames 2 --max-tracks 96 --max-detections 192
   --estimate-camera-motion --overwrite-clips
 )
+if [[ "${UNCOMPRESSED_CLIPS}" == "1" ]]; then
+  train_protocol+=(--uncompressed-clips)
+  val_protocol+=(--uncompressed-clips)
+fi
 
 # DanceTrack's official train1/train2 names are archive shards of one semantic
 # train split. Both write to one clip directory while retaining distinct caches.

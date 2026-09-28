@@ -210,6 +210,10 @@ bash scripts/prepare_all_datasets.sh all
 
 To rebuild only DanceTrack, use `bash scripts/prepare_all_datasets.sh
 dancetrack`. Multiple dataset names can be passed in one invocation.
+For faster single-GPU preparation, use
+`INFERENCE_BATCH_SIZE=16 CROP_BATCH_SIZE=256 bash
+scripts/prepare_all_datasets.sh dancetrack`; reduce to the default `8/128` if
+CUDA runs out of memory.
 
 The operation is resumable: detector outputs are saved per frame before clips
 are assembled. To prepare one split manually:

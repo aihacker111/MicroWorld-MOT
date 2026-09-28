@@ -6,6 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
@@ -64,6 +66,18 @@ def main() -> None:
     parser.add_argument("--max-tracks", type=int, default=64)
     parser.add_argument("--max-detections", type=int, default=128)
     parser.add_argument(
+        "--inference-batch-size",
+        type=int,
+        default=8,
+        help="Number of full frames sent to YOLO in one call",
+    )
+    parser.add_argument(
+        "--crop-batch-size",
+        type=int,
+        default=128,
+        help="Number of detection crops embedded in one YOLO call",
+    )
+    parser.add_argument(
         "--temporal-intervals",
         default="1",
         help="Comma-separated frame gaps sampled reproducibly per clip, e.g. 1,2,4",
@@ -94,6 +108,21 @@ def main() -> None:
         help="Cache detections for test data without requiring GT or building clips",
     )
     parser.add_argument("--estimate-camera-motion", action="store_true")
+    parser.add_argument(
+        "--recompute-camera-motion",
+        action="store_true",
+        help="Ignore the saved per-sequence camera-motion cache",
+    )
+    parser.add_argument(
+        "--no-frame-cache-memory",
+        action="store_true",
+        help="Use less RAM but reread frame caches for overlapping clips",
+    )
+    parser.add_argument(
+        "--uncompressed-clips",
+        action="store_true",
+        help="Write much faster/larger NPZ clips without ZIP compression",
+    )
     parser.add_argument(
         "--keep-mot17-detector-duplicates",
         action="store_true",
@@ -132,6 +161,7 @@ def main() -> None:
         device=args.device,
         score_threshold=args.score_threshold,
         allowed_coco_labels=coco_labels,
+        crop_batch_size=args.crop_batch_size,
     )
     if not args.cache_only and not args.output:
         raise ValueError("--output is required unless --cache-only is set")
@@ -149,6 +179,7 @@ def main() -> None:
             perception,
             args.detector,
             overwrite=args.overwrite_cache,
+            inference_batch_size=args.inference_batch_size,
         )
         if args.cache_only:
             continue
@@ -156,7 +187,19 @@ def main() -> None:
             pattern = f"{args.dataset_name}_{sequence.name}_*.npz"
             for previous_clip in output_root.glob(pattern):
                 previous_clip.unlink()
-        camera_motion = estimate_camera_motion(sequence) if args.estimate_camera_motion else None
+        camera_motion = None
+        if args.estimate_camera_motion:
+            camera_cache = frame_cache / "camera_motion.npy"
+            if camera_cache.exists() and not args.recompute_camera_motion:
+                camera_motion = np.load(camera_cache)
+                if camera_motion.shape != (sequence.length, 6):
+                    raise ValueError(
+                        f"Stale camera-motion cache at {camera_cache}; rerun with "
+                        "--recompute-camera-motion"
+                    )
+            else:
+                camera_motion = estimate_camera_motion(sequence)
+                np.save(camera_cache, camera_motion)
         clips = build_sequence_clips(
             sequence=sequence,
             frame_cache_dir=frame_cache,
@@ -174,6 +217,8 @@ def main() -> None:
             min_track_frames=args.min_track_frames,
             detector_source=args.detector,
             score_threshold=args.score_threshold,
+            reuse_frame_cache=not args.no_frame_cache_memory,
+            compress_clips=not args.uncompressed_clips,
         )
         total += clips
         print(f"[{index}/{len(sequences)}] {sequence.name}: {clips} clips", flush=True)

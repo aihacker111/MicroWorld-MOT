@@ -81,6 +81,32 @@ bash scripts/prepare_all_datasets.sh dancetrack
 
 The commands below show the equivalent settings explicitly.
 
+### Faster preparation
+
+The preparation path batches both full-frame detection and crop embeddings,
+keeps each frame cache in RAM while overlapping clips are built, and saves the
+ORB camera-motion result per sequence. These optimizations do not change the
+protocol or targets. On a GPU with enough memory, increase both batch sizes:
+
+```bash
+INFERENCE_BATCH_SIZE=16 CROP_BATCH_SIZE=256 \
+  bash scripts/prepare_all_datasets.sh dancetrack
+```
+
+If CUDA runs out of memory, try `8/128` (the defaults) or `4/64`. Re-running
+the command reuses both detector and camera-motion caches. For maximum clip
+writing speed, `UNCOMPRESSED_CLIPS=1` disables ZIP compression; this preserves
+array values but can consume much more disk space:
+
+```bash
+UNCOMPRESSED_CLIPS=1 INFERENCE_BATCH_SIZE=16 CROP_BATCH_SIZE=256 \
+  bash scripts/prepare_all_datasets.sh dancetrack
+```
+
+Do not run multiple YOLO preparation processes on the same GPU. If RAM is the
+limitation, use `--no-frame-cache-memory` in a manual command; it is slower but
+keeps less detector data resident.
+
 ```bash
 python tools/prepare_real_data.py \
   --format mot \

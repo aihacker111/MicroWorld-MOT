@@ -3,10 +3,52 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from microworld_mot.data.cache_builder import build_sequence_clips
+from microworld_mot.data.cache_builder import build_sequence_clips, cache_sequence_detections
 from microworld_mot.data.datasets import CachedSequenceDataset
 from microworld_mot.data.sequences import FrameObjects, SequenceRecord
+from microworld_mot.perception import DetectorOutput
 from tools.audit_dataset_clips import audit
+
+
+class _BatchPerception:
+    feature_dim = 4
+    score_threshold = 0.15
+
+    def __init__(self) -> None:
+        self.batch_sizes: list[int] = []
+
+    def detect_batch(self, image_paths):
+        self.batch_sizes.append(len(image_paths))
+        return [
+            DetectorOutput(
+                boxes_xyxy=torch.tensor([[1.0, 2.0, 3.0, 4.0]]),
+                scores=torch.tensor([0.9]),
+                labels=torch.tensor([1]),
+                features=torch.ones(1, self.feature_dim),
+            )
+            for _ in image_paths
+        ]
+
+
+def test_detection_cache_batches_missing_frames(tmp_path: Path) -> None:
+    sequence = SequenceRecord(
+        name="batch_cache",
+        image_paths=[tmp_path / f"{index}.jpg" for index in range(5)],
+        width=100,
+        height=100,
+        ground_truth={},
+    )
+    perception = _BatchPerception()
+    destination = cache_sequence_detections(
+        sequence,
+        tmp_path / "cache",
+        perception,  # type: ignore[arg-type]
+        "yolo11n",
+        inference_batch_size=2,
+    )
+
+    assert perception.batch_sizes == [2, 2, 1]
+    assert len(list(destination.glob("*.npz"))) == 5
 
 
 def test_real_detection_cache_builds_unaligned_clip(tmp_path: Path) -> None:

@@ -65,19 +65,9 @@ class YOLO11Perception:
             return source.convert("RGB").copy()
 
     @torch.inference_mode()
-    def _encode_crops(self, image, boxes: Tensor) -> Tensor:
-        width, height = image.size
-        crops = []
-        for box in boxes.detach().cpu():
-            x1 = max(0, min(int(torch.floor(box[0]).item()), width - 1))
-            y1 = max(0, min(int(torch.floor(box[1]).item()), height - 1))
-            x2 = max(x1 + 1, min(int(torch.ceil(box[2]).item()), width))
-            y2 = max(y1 + 1, min(int(torch.ceil(box[3]).item()), height))
-            crops.append(image.crop((x1, y1, x2, y2)))
-
+    def _encode_crop_list(self, crops: list) -> Tensor:
         if not crops:
             return torch.empty((0, self.feature_dim), dtype=torch.float32)
-
         outputs: list[Tensor] = []
         for start in range(0, len(crops), self.crop_batch_size):
             batch = crops[start : start + self.crop_batch_size]
@@ -98,30 +88,97 @@ class YOLO11Perception:
             outputs.append(batch_features.cpu())
         return torch.nn.functional.normalize(torch.cat(outputs), dim=-1)
 
+    @staticmethod
+    def _extract_crops(image, boxes: Tensor) -> list:
+        width, height = image.size
+        crops = []
+        for box in boxes.detach().cpu():
+            x1 = max(0, min(int(torch.floor(box[0]).item()), width - 1))
+            y1 = max(0, min(int(torch.floor(box[1]).item()), height - 1))
+            x2 = max(x1 + 1, min(int(torch.ceil(box[2]).item()), width))
+            y2 = max(y1 + 1, min(int(torch.ceil(box[3]).item()), height))
+            crops.append(image.crop((x1, y1, x2, y2)))
+        return crops
+
     @torch.inference_mode()
-    def detect(self, image_path: str | Path) -> DetectorOutput:
-        classes = None
-        if self.allowed_coco_labels:
-            classes = sorted(label - 1 for label in self.allowed_coco_labels)
-        result = self.model.predict(
-            source=str(image_path),
+    def _encode_crops(self, image, boxes: Tensor) -> Tensor:
+        return self._encode_crop_list(self._extract_crops(image, boxes))
+
+    def _classes(self) -> list[int] | None:
+        if not self.allowed_coco_labels:
+            return None
+        return sorted(label - 1 for label in self.allowed_coco_labels)
+
+    @torch.inference_mode()
+    def detect_batch(self, image_paths: list[str | Path]) -> list[DetectorOutput]:
+        if not image_paths:
+            return []
+        results = self.model.predict(
+            source=[str(path) for path in image_paths],
             conf=self.score_threshold,
-            classes=classes,
+            classes=self._classes(),
             imgsz=self.image_size,
             device=self.device,
             embed=None,
             verbose=False,
-        )[0]
-        boxes = result.boxes.xyxy.detach().cpu().float()
-        scores = result.boxes.conf.detach().cpu().float()
-        labels = result.boxes.cls.detach().cpu().long() + 1
-        features = self._encode_crops(self._read_image(image_path), boxes)
-        return DetectorOutput(
-            boxes_xyxy=boxes,
-            scores=scores,
-            labels=labels,
-            features=features,
         )
+        if len(results) != len(image_paths):
+            raise RuntimeError(
+                f"YOLO returned {len(results)} results for {len(image_paths)} input images"
+            )
+
+        frame_data: list[tuple[Tensor, Tensor, Tensor]] = []
+        crops: list = []
+        crop_counts: list[int] = []
+        for image_path, result in zip(image_paths, results, strict=True):
+            boxes = result.boxes.xyxy.detach().cpu().float()
+            scores = result.boxes.conf.detach().cpu().float()
+            labels = result.boxes.cls.detach().cpu().long() + 1
+            frame_data.append((boxes, scores, labels))
+            frame_crops = self._extract_crops(self._read_image(image_path), boxes)
+            crops.extend(frame_crops)
+            crop_counts.append(len(frame_crops))
+
+        all_features = self._encode_crop_list(crops)
+        outputs: list[DetectorOutput] = []
+        cursor = 0
+        for (boxes, scores, labels), count in zip(frame_data, crop_counts, strict=True):
+            outputs.append(
+                DetectorOutput(
+                    boxes_xyxy=boxes,
+                    scores=scores,
+                    labels=labels,
+                    features=all_features[cursor : cursor + count],
+                )
+            )
+            cursor += count
+        return outputs
+
+    @torch.inference_mode()
+    def detect(self, image_path: str | Path) -> DetectorOutput:
+        return self.detect_batch([image_path])[0]
+
+    @torch.inference_mode()
+    def encode_boxes_batch(
+        self,
+        image_paths: list[str | Path],
+        boxes_per_image: list[Tensor],
+    ) -> list[Tensor]:
+        if len(image_paths) != len(boxes_per_image):
+            raise ValueError("image_paths and boxes_per_image must have the same length")
+        crops: list = []
+        crop_counts: list[int] = []
+        for image_path, boxes in zip(image_paths, boxes_per_image, strict=True):
+            frame_crops = self._extract_crops(self._read_image(image_path), boxes)
+            crops.extend(frame_crops)
+            crop_counts.append(len(frame_crops))
+        all_features = self._encode_crop_list(crops)
+        outputs: list[Tensor] = []
+        cursor = 0
+        for count in crop_counts:
+            outputs.append(all_features[cursor : cursor + count])
+            cursor += count
+        return outputs
 
     @torch.inference_mode()
     def encode_boxes(self, image_path: str | Path, boxes_xyxy: Tensor) -> Tensor:
