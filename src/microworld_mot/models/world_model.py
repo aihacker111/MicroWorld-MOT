@@ -53,7 +53,9 @@ class ObjectWorldModel(nn.Module):
             dropout=config.dropout,
         )
 
-    def initialize_state(self, boxes: Tensor, appearance: Tensor, valid: Tensor | None = None) -> WorldState:
+    def initialize_state(
+        self, boxes: Tensor, appearance: Tensor, valid: Tensor | None = None
+    ) -> WorldState:
         if valid is None:
             valid = torch.ones(boxes.shape[:2], dtype=torch.bool, device=boxes.device)
         batch, objects, _ = boxes.shape
@@ -61,9 +63,7 @@ class ObjectWorldModel(nn.Module):
         existence = valid.to(boxes.dtype)
         occlusion = torch.zeros_like(existence)
         log_variance = torch.full_like(boxes, math.log(0.01**2))
-        encoded = self._encode(
-            boxes, velocity, appearance, existence, occlusion, log_variance
-        )
+        encoded = self._encode(boxes, velocity, appearance, existence, occlusion, log_variance)
         memory = self.input_norm(encoded) * valid.unsqueeze(-1)
         return WorldState(
             boxes=boxes,
@@ -125,8 +125,11 @@ class ObjectWorldModel(nn.Module):
         interaction = self.graph(memory, state.boxes, state.velocity, state.valid)
         next_memory, acceleration, damping = self.transition(memory, interaction, camera_motion)
 
-        next_velocity = damping * state.velocity + delta_time * acceleration
-        physical_box = state.boxes + delta_time * next_velocity + 0.5 * delta_time.square() * acceleration
+        damped_velocity = damping * state.velocity
+        next_velocity = damped_velocity + delta_time * acceleration
+        physical_box = (
+            state.boxes + delta_time * damped_velocity + 0.5 * delta_time.square() * acceleration
+        )
 
         batch, objects, _ = state.boxes.shape
         modes = self.config.motion_modes
@@ -147,7 +150,17 @@ class ObjectWorldModel(nn.Module):
 
         existence = self.existence_head(next_memory).squeeze(-1).sigmoid()
         occlusion = self.occlusion_head(next_memory).squeeze(-1).sigmoid()
-        refresh_inputs = torch.cat((next_memory, variance.mean(dim=-1, keepdim=True), occlusion.unsqueeze(-1), existence.unsqueeze(-1), acceleration.norm(dim=-1, keepdim=True), delta_time.expand(-1, objects, 1)), dim=-1)
+        refresh_inputs = torch.cat(
+            (
+                next_memory,
+                variance.mean(dim=-1, keepdim=True),
+                occlusion.unsqueeze(-1),
+                existence.unsqueeze(-1),
+                acceleration.norm(dim=-1, keepdim=True),
+                delta_time.expand(-1, objects, 1),
+            ),
+            dim=-1,
+        )
         refresh_logits = self.refresh_head(refresh_inputs).squeeze(-1)
         latent_prediction = torch.nn.functional.normalize(
             self.latent_prediction_head(next_memory), dim=-1

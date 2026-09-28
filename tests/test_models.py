@@ -54,3 +54,20 @@ def test_world_model_backpropagates() -> None:
     prediction = system.predict(state)
     prediction.expected_boxes.square().mean().backward()
     assert any(parameter.grad is not None for parameter in system.world_model.parameters())
+
+
+@pytest.mark.parametrize("name", ["constant_velocity", "mlp_delta", "gru_tiny", "ssm_tiny"])
+def test_baseline_uses_elapsed_frame_time(name: str) -> None:
+    config = ModelConfig(
+        name=name,
+        latent_dim=16,
+        observation_dim=8,
+        appearance_dim=8,
+        graph_hidden_dim=24,
+    )
+    system = build_system(config)
+    state = system.initialize_state(torch.randn(2, 3, 4), torch.randn(2, 3, 8))
+    state.velocity.fill_(0.1)
+    one_frame = system.predict(state, delta_time=torch.ones(2)).expected_boxes
+    four_frames = system.predict(state, delta_time=torch.full((2,), 4.0)).expected_boxes
+    assert not torch.allclose(one_frame, four_frames)

@@ -57,9 +57,13 @@ changed without retraining the world-model interface.
 - EMA target encoder and masked future-object latent prediction.
 - Two-step open-loop Object-JEPA rollout objective.
 - Single-run training, evaluation, parameter/GFLOP profiling and tests.
+- GT-first, coverage-preserving clip construction with temporal-interval metadata.
+- Online detector miss/false-positive/jitter augmentation disabled for validation.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for equations and tensor contracts.
 See [docs/DATASETS.md](docs/DATASETS.md) for official sources and leakage notes.
+See [docs/FAIR_DATA_PROTOCOL.md](docs/FAIR_DATA_PROTOCOL.md) for the reproducible
+training-data protocol and its comparison with published MOT recipes.
 
 ## Installation
 
@@ -188,21 +192,24 @@ needed. Test splits without public GT produce image/video metadata and an empty
 
 The project does not bypass dataset agreements or redistribute images.
 
-Expected roots:
+Expected roots after `scripts/download_datasets.sh`:
 
 ```text
-data/raw/DanceTrack/dancetrack/{train,val}/<sequence>/{img1,gt}
+data/raw/DanceTrack/{train1,train2,val}/<sequence>/{img1,gt}
 data/raw/MOT17/train/MOT17-xx-*/{img1,gt,det}
 data/raw/MOT16/train/MOT16-xx/{img1,gt,det}
 data/raw/VisDrone/VisDrone2019-MOT-{train,val}/{sequences,annotations}
 ```
 
-Edit the four roots at the top of the provided script, then run:
+The preparation script resolves its roots from the repository by default. You
+can override `DATA_ROOT`, a dataset-specific root, or `DEVICE` from the shell:
 
 ```bash
-cd ~/Desktop/MicroWorld-MOT
-bash scripts/prepare_all_datasets.sh
+bash scripts/prepare_all_datasets.sh all
 ```
+
+To rebuild only DanceTrack, use `bash scripts/prepare_all_datasets.sh
+dancetrack`. Multiple dataset names can be passed in one invocation.
 
 The operation is resumable: detector outputs are saved per frame before clips
 are assembled. To prepare one split manually:
@@ -210,18 +217,31 @@ are assembled. To prepare one split manually:
 ```bash
 python tools/prepare_real_data.py \
   --format mot \
-  --root data/raw/DanceTrack/dancetrack/train \
+  --root data/raw/DanceTrack/train1 \
   --dataset-name dancetrack \
   --output data/clips/dancetrack/train \
-  --cache data/detector_cache/dancetrack/train \
+  --cache data/detector_cache/dancetrack/train1 \
   --detector yolo11n \
   --device cuda:0 \
-  --sequence-length 16 \
+  --score-threshold 0.15 \
+  --iou-threshold 0.50 \
+  --sequence-length 24 \
   --stride 8 \
-  --max-tracks 64 \
-  --max-detections 128 \
-  --estimate-camera-motion
+  --temporal-intervals 1,2,4 \
+  --sampling-seed 7 \
+  --min-track-frames 2 \
+  --max-tracks 96 \
+  --max-detections 192 \
+  --gt-classes 1 \
+  --coco-labels 1 \
+  --estimate-camera-motion \
+  --overwrite-clips
 ```
+
+Repeat this for `train2`, writing to the same clip directory but a separate
+detector-cache directory. Prepare validation with `--temporal-intervals 1`.
+The rationale and reproducibility checklist are in
+[`docs/FAIR_DATA_PROTOCOL.md`](docs/FAIR_DATA_PROTOCOL.md).
 
 For MOT16/17 public detections, use `--detector public`; YOLO11n still extracts
 an appearance feature for every supplied box. For a new detector, emit the same
@@ -249,6 +269,13 @@ Each cached clip contains:
 | `assignment` | `[T,N]` | matched detection index or `-1` |
 | `appearance` | `[N,256]` | per-track feature prototype target |
 | `camera_motion` | `[T,6]` | affine-motion token |
+| `delta_time` | `[T]` | elapsed source frames per transition |
+| `track_ids` | `[N]` | original GT identity or `-1` padding |
+| `frame_numbers` | `[T]` | original frame numbers sampled into the clip |
+
+Protocol metadata (detector, thresholds, capacities, interval, seed and
+protocol version) is saved in every clip and summarized by
+`tools/audit_dataset_clips.py`.
 
 The assignment is only a training target. Detection order is independent of
 track order, unmatched detections remain as false positives, and online
@@ -307,7 +334,7 @@ sequence:
 python tools/run_dataset.py \
   --checkpoint outputs/real_multidataset_tiny/best.pt \
   --format mot \
-  --root /datasets/DanceTrack/dancetrack/val \
+  --root data/raw/DanceTrack/val \
   --cache data/detector_cache/dancetrack/val \
   --output outputs/dancetrack_val \
   --device cuda:0 \

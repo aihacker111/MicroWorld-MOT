@@ -1,7 +1,13 @@
+# ruff: noqa: E402 -- make direct `python tools/...` execution work without installation.
+
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from microworld_mot.data.cache_builder import (
     build_sequence_clips,
@@ -16,6 +22,13 @@ def _parse_classes(raw: str) -> set[int] | None:
     if not raw:
         return None
     return {int(value) for value in raw.split(",")}
+
+
+def _parse_intervals(raw: str) -> tuple[int, ...]:
+    intervals = tuple(sorted({int(value) for value in raw.split(",") if value}))
+    if not intervals or any(value < 1 for value in intervals):
+        raise ValueError("--temporal-intervals must contain positive integers")
+    return intervals
 
 
 def _deduplicate_mot17(sequences):
@@ -50,6 +63,18 @@ def main() -> None:
     parser.add_argument("--stride", type=int, default=8)
     parser.add_argument("--max-tracks", type=int, default=64)
     parser.add_argument("--max-detections", type=int, default=128)
+    parser.add_argument(
+        "--temporal-intervals",
+        default="1",
+        help="Comma-separated frame gaps sampled reproducibly per clip, e.g. 1,2,4",
+    )
+    parser.add_argument("--sampling-seed", type=int, default=7)
+    parser.add_argument(
+        "--min-track-frames",
+        type=int,
+        default=2,
+        help="Minimum GT occurrences inside a sampled clip",
+    )
     parser.add_argument("--gt-classes", default="", help="Comma-separated source GT classes")
     parser.add_argument("--coco-labels", default="", help="Comma-separated COCO detector labels")
     parser.add_argument(
@@ -58,6 +83,11 @@ def main() -> None:
         help="Optional comma-separated exact sequence names for a leak-free split",
     )
     parser.add_argument("--overwrite-cache", action="store_true")
+    parser.add_argument(
+        "--overwrite-clips",
+        action="store_true",
+        help="Remove old clips for each selected sequence before rebuilding it",
+    )
     parser.add_argument(
         "--cache-only",
         action="store_true",
@@ -70,6 +100,7 @@ def main() -> None:
         help="Keep DPM/FRCNN/SDP copies even when running a new detector",
     )
     args = parser.parse_args()
+    temporal_intervals = _parse_intervals(args.temporal_intervals)
 
     gt_classes = _parse_classes(args.gt_classes)
     if args.format == "mot":
@@ -77,9 +108,7 @@ def main() -> None:
             args.root, gt_classes or {1}, require_ground_truth=not args.cache_only
         )
     else:
-        sequences = scan_visdrone(
-            args.root, gt_classes, require_ground_truth=not args.cache_only
-        )
+        sequences = scan_visdrone(args.root, gt_classes, require_ground_truth=not args.cache_only)
     if (
         args.dataset_name.lower() == "mot17"
         and args.detector != "public"
@@ -123,6 +152,10 @@ def main() -> None:
         )
         if args.cache_only:
             continue
+        if args.overwrite_clips:
+            pattern = f"{args.dataset_name}_{sequence.name}_*.npz"
+            for previous_clip in output_root.glob(pattern):
+                previous_clip.unlink()
         camera_motion = estimate_camera_motion(sequence) if args.estimate_camera_motion else None
         clips = build_sequence_clips(
             sequence=sequence,
@@ -136,6 +169,11 @@ def main() -> None:
             iou_threshold=args.iou_threshold,
             dataset_name=args.dataset_name,
             camera_motion=camera_motion,
+            temporal_intervals=temporal_intervals,
+            sampling_seed=args.sampling_seed,
+            min_track_frames=args.min_track_frames,
+            detector_source=args.detector,
+            score_threshold=args.score_threshold,
         )
         total += clips
         print(f"[{index}/{len(sequences)}] {sequence.name}: {clips} clips", flush=True)

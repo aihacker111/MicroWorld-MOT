@@ -1,10 +1,16 @@
+# ruff: noqa: E402 -- make direct `python tools/...` execution work without installation.
+
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import numpy as np
 import torch
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from microworld_mot.config import config_from_dict
 from microworld_mot.data.cache_builder import estimate_camera_motion, normalize_xyxy
@@ -34,7 +40,9 @@ def main() -> None:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--format", choices=["mot", "visdrone"], required=True)
     parser.add_argument("--root", required=True)
-    parser.add_argument("--cache", required=True, help="Per-frame cache made by prepare_real_data.py")
+    parser.add_argument(
+        "--cache", required=True, help="Per-frame cache made by prepare_real_data.py"
+    )
     parser.add_argument("--output", required=True)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--score-threshold", type=float, default=0.15)
@@ -86,9 +94,9 @@ def main() -> None:
                 detections = None
             camera_motion = torch.from_numpy(camera_tokens[frame - 1]).to(device).unsqueeze(0)
             for track in tracker.step(detections, camera_motion=camera_motion):
-                xyxy = cxcylogwh_to_xyxy(
-                    track.box.unsqueeze(0), (sequence.height, sequence.width)
-                )[0]
+                xyxy = cxcylogwh_to_xyxy(track.box.unsqueeze(0), (sequence.height, sequence.width))[
+                    0
+                ]
                 left, top, right, bottom = [float(value) for value in xyxy]
                 rows.append(
                     [

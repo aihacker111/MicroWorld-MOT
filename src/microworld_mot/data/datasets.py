@@ -65,7 +65,9 @@ class SyntheticMOTDataset(Dataset[dict[str, Tensor]]):
             death_time = torch.where(can_die, sampled_death, death_time)
 
         occlusion_start = torch.randint(1, max(2, time - 2), (count,), generator=generator)
-        occlusion_length = torch.randint(0, max(1, min(5, time // 2)), (count,), generator=generator)
+        occlusion_length = torch.randint(
+            0, max(1, min(5, time // 2)), (count,), generator=generator
+        )
         for frame in range(time):
             if frame > 0:
                 velocity = velocity + acceleration
@@ -98,9 +100,7 @@ class SyntheticMOTDataset(Dataset[dict[str, Tensor]]):
             true_count = min(len(track_indices), detections)
             track_indices = track_indices[:true_count]
             capacity = detections - true_count
-            false_count = int(
-                torch.randint(0, min(4, capacity + 1), (1,), generator=generator)
-            )
+            false_count = int(torch.randint(0, min(4, capacity + 1), (1,), generator=generator))
             total = true_count + false_count
             if total == 0:
                 continue
@@ -109,22 +109,14 @@ class SyntheticMOTDataset(Dataset[dict[str, Tensor]]):
             noise[..., 2:] *= 0.5
             frame_boxes += noise
             frame_features = appearance[track_indices].clone()
-            frame_features += 0.03 * torch.randn(
-                frame_features.shape, generator=generator
-            )
+            frame_features += 0.03 * torch.randn(frame_features.shape, generator=generator)
             frame_scores = 0.7 + 0.3 * torch.rand(true_count, generator=generator)
             source_tracks = track_indices.clone()
             if false_count:
                 false_boxes = torch.rand(false_count, 4, generator=generator)
-                false_boxes[:, 2:] = (
-                    0.02 + 0.15 * false_boxes[:, 2:]
-                ).log()
-                false_features = torch.randn(
-                    false_count, self.observation_dim, generator=generator
-                )
-                false_scores = 0.15 + 0.55 * torch.rand(
-                    false_count, generator=generator
-                )
+                false_boxes[:, 2:] = (0.02 + 0.15 * false_boxes[:, 2:]).log()
+                false_features = torch.randn(false_count, self.observation_dim, generator=generator)
+                false_scores = 0.15 + 0.55 * torch.rand(false_count, generator=generator)
                 frame_boxes = torch.cat((frame_boxes, false_boxes), dim=0)
                 frame_features = torch.cat((frame_features, false_features), dim=0)
                 frame_scores = torch.cat((frame_scores, false_scores), dim=0)
@@ -133,9 +125,7 @@ class SyntheticMOTDataset(Dataset[dict[str, Tensor]]):
                 )
             permutation = torch.randperm(total, generator=generator)
             frame_boxes = frame_boxes[permutation]
-            frame_features = torch.nn.functional.normalize(
-                frame_features[permutation], dim=-1
-            )
+            frame_features = torch.nn.functional.normalize(frame_features[permutation], dim=-1)
             frame_scores = frame_scores[permutation]
             source_tracks = source_tracks[permutation]
             detection_boxes[frame, :total] = frame_boxes
@@ -160,6 +150,7 @@ class SyntheticMOTDataset(Dataset[dict[str, Tensor]]):
             "assignment": assignment,
             "appearance": appearance,
             "camera_motion": camera,
+            "delta_time": torch.ones(time),
         }
 
 
@@ -185,15 +176,111 @@ class CachedSequenceDataset(Dataset[dict[str, Tensor]]):
         root: str | Path,
         detection_dropout: float = 0.0,
         box_noise: float = 0.0,
+        temporal_dropout: float = 0.0,
+        temporal_dropout_max_span: int = 4,
+        false_positive_ratio: float = 0.0,
+        score_noise: float = 0.0,
+        shuffle_detections: bool = False,
     ) -> None:
         self.files = sorted(Path(root).glob("*.npz"))
         self.detection_dropout = detection_dropout
         self.box_noise = box_noise
+        self.temporal_dropout = temporal_dropout
+        self.temporal_dropout_max_span = temporal_dropout_max_span
+        self.false_positive_ratio = false_positive_ratio
+        self.score_noise = score_noise
+        self.shuffle_detections = shuffle_detections
+        for name, value in {
+            "detection_dropout": detection_dropout,
+            "temporal_dropout": temporal_dropout,
+            "false_positive_ratio": false_positive_ratio,
+        }.items():
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1]")
+        if box_noise < 0 or score_noise < 0:
+            raise ValueError("box_noise and score_noise must be non-negative")
+        if temporal_dropout_max_span < 1:
+            raise ValueError("temporal_dropout_max_span must be positive")
         if not self.files:
             raise FileNotFoundError(f"No .npz sequences found in {root}")
 
     def __len__(self) -> int:
         return len(self.files)
+
+    @staticmethod
+    def _repair_assignment(output: dict[str, Tensor]) -> None:
+        assignment = output["assignment"]
+        safe = assignment.clamp_min(0)
+        assigned_valid = torch.gather(output["detection_valid"], 1, safe)
+        output["assignment"] = torch.where(
+            (assignment >= 0) & assigned_valid,
+            assignment,
+            torch.full_like(assignment, -1),
+        )
+
+    def _apply_temporal_dropout(self, output: dict[str, Tensor]) -> None:
+        if self.temporal_dropout <= 0:
+            return
+        time, tracks = output["assignment"].shape
+        valid_tracks = output["slot_valid"].nonzero(as_tuple=False).flatten().tolist()
+        for track in valid_tracks:
+            if torch.rand(()) >= self.temporal_dropout:
+                continue
+            span = int(torch.randint(1, min(time, self.temporal_dropout_max_span) + 1, (1,)))
+            start = int(torch.randint(0, time - span + 1, (1,)))
+            for frame in range(start, start + span):
+                detection = int(output["assignment"][frame, track])
+                if detection >= 0:
+                    output["detection_valid"][frame, detection] = False
+                    output["assignment"][frame, track] = -1
+
+    def _insert_false_positives(self, output: dict[str, Tensor]) -> None:
+        if self.false_positive_ratio <= 0:
+            return
+        for frame in range(output["detection_valid"].shape[0]):
+            valid = output["detection_valid"][frame].nonzero(as_tuple=False).flatten()
+            invalid = (~output["detection_valid"][frame]).nonzero(as_tuple=False).flatten()
+            if not len(valid) or not len(invalid):
+                continue
+            expected = len(valid) * self.false_positive_ratio
+            count = int(expected)
+            count += int(torch.rand(()) < expected - count)
+            count = min(len(invalid), count)
+            if count == 0:
+                continue
+            targets = invalid[torch.randperm(len(invalid))[:count]]
+            sources = valid[torch.randint(0, len(valid), (count,))]
+            boxes = output["detection_boxes"][frame, sources].clone()
+            boxes[:, :2] += 0.05 * torch.randn_like(boxes[:, :2])
+            boxes[:, :2].clamp_(0.0, 1.0)
+            boxes[:, 2:] += 0.15 * torch.randn_like(boxes[:, 2:])
+            features = output["detection_features"][frame, sources].clone()
+            features += 0.05 * torch.randn_like(features)
+            features = torch.nn.functional.normalize(features, dim=-1)
+            scores = output["detection_scores"][frame, sources]
+            scores = scores * (0.2 + 0.6 * torch.rand_like(scores))
+            output["detection_boxes"][frame, targets] = boxes
+            output["detection_features"][frame, targets] = features
+            output["detection_scores"][frame, targets] = scores
+            output["detection_valid"][frame, targets] = True
+
+    @staticmethod
+    def _shuffle_detection_slots(output: dict[str, Tensor]) -> None:
+        detections = output["detection_valid"].shape[1]
+        for frame in range(output["detection_valid"].shape[0]):
+            permutation = torch.randperm(detections)
+            inverse = torch.empty_like(permutation)
+            inverse[permutation] = torch.arange(detections)
+            for key in (
+                "detection_boxes",
+                "detection_features",
+                "detection_scores",
+                "detection_valid",
+            ):
+                output[key][frame] = output[key][frame, permutation]
+            assigned = output["assignment"][frame]
+            mask = assigned >= 0
+            output["assignment"][frame, mask] = inverse[assigned[mask]]
 
     def __getitem__(self, index: int) -> dict[str, Tensor]:
         with np.load(self.files[index]) as sample:
@@ -210,21 +297,29 @@ class CachedSequenceDataset(Dataset[dict[str, Tensor]]):
                 else:
                     value = value.float()
                 output[key] = value
+            if "delta_time" in sample.files:
+                output["delta_time"] = torch.from_numpy(sample["delta_time"]).float()
+            else:
+                output["delta_time"] = torch.ones(output["boxes"].shape[0])
             if self.detection_dropout > 0:
-                dropped = torch.rand_like(output["detection_scores"]) < self.detection_dropout
+                dropped = (
+                    torch.rand_like(output["detection_scores"]) < self.detection_dropout
+                ) & output["detection_valid"]
                 output["detection_valid"] &= ~dropped
-                assignment = output["assignment"]
-                safe = assignment.clamp_min(0)
-                assigned_valid = torch.gather(output["detection_valid"], 1, safe)
-                output["assignment"] = torch.where(
-                    (assignment >= 0) & assigned_valid,
-                    assignment,
-                    torch.full_like(assignment, -1),
-                )
+                self._repair_assignment(output)
+            self._apply_temporal_dropout(output)
             if self.box_noise > 0:
                 noise = torch.randn_like(output["detection_boxes"]) * self.box_noise
                 noise[..., 2:] *= 0.5
                 output["detection_boxes"] += noise * output["detection_valid"].unsqueeze(-1)
+            if self.score_noise > 0:
+                noise = torch.randn_like(output["detection_scores"]) * self.score_noise
+                output["detection_scores"] = (
+                    output["detection_scores"] + noise * output["detection_valid"]
+                ).clamp(0.0, 1.0)
+            self._insert_false_positives(output)
+            if self.shuffle_detections:
+                self._shuffle_detection_slots(output)
             return output
 
 
@@ -253,6 +348,11 @@ def build_datasets(
                     path,
                     detection_dropout=data_config.observation_dropout,
                     box_noise=data_config.box_noise,
+                    temporal_dropout=data_config.temporal_dropout,
+                    temporal_dropout_max_span=data_config.temporal_dropout_max_span,
+                    false_positive_ratio=data_config.false_positive_ratio,
+                    score_noise=data_config.score_noise,
+                    shuffle_detections=data_config.shuffle_detections,
                 )
                 for path in data_config.train_paths
             ]
@@ -271,5 +371,9 @@ def build_datasets(
         train_count = len(full) - val_count
         if train_count < 1:
             raise ValueError("Cached dataset needs at least two sequences")
-        return tuple(random_split(full, [train_count, val_count], generator=torch.Generator().manual_seed(seed)))  # type: ignore[return-value]
+        return tuple(
+            random_split(
+                full, [train_count, val_count], generator=torch.Generator().manual_seed(seed)
+            )
+        )  # type: ignore[return-value]
     raise ValueError(f"Unknown data kind: {data_config.kind}")

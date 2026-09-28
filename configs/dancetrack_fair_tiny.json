@@ -17,45 +17,39 @@
     "kind": "cached",
     "path": "",
     "train_paths": [
-      "data/clips/dancetrack/train",
-      "data/clips/mot17/train",
-      "data/clips/mot16/train",
-      "data/clips/visdrone/train"
+      "data/clips/dancetrack/train"
     ],
     "val_paths": [
-      "data/clips/dancetrack/val",
-      "data/clips/mot17/val",
-      "data/clips/mot16/val",
-      "data/clips/visdrone/val"
+      "data/clips/dancetrack/val"
     ],
     "sequence_length": 24,
     "max_tracks": 96,
     "max_detections": 192,
     "train_samples": 0,
     "val_samples": 0,
-    "observation_dropout": 0.1,
+    "observation_dropout": 0.10,
     "box_noise": 0.002,
     "temporal_dropout": 0.15,
     "temporal_dropout_max_span": 6,
-    "false_positive_ratio": 0.2,
+    "false_positive_ratio": 0.20,
     "score_noise": 0.03,
     "shuffle_detections": true,
     "num_workers": 4,
-    "balance_datasets": true
+    "balance_datasets": false
   },
   "train": {
     "epochs": 60,
-    "batch_size": 2,
+    "batch_size": 1,
     "learning_rate": 0.0003,
     "weight_decay": 0.0001,
     "gradient_clip": 1.0,
     "seed": 7,
     "device": "cuda:0",
     "amp": true,
-    "output_dir": "outputs/real_multidataset_tiny",
+    "output_dir": "outputs/dancetrack_fair_tiny",
     "resume": "",
     "counterfactual_warmup_epochs": 5,
-    "object_mask_ratio": 0.35,
+    "object_mask_ratio": 0.25,
     "target_ema_decay": 0.996
   },
   "loss": {

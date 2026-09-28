@@ -44,7 +44,9 @@ def _to_device(batch: dict[str, Tensor], device: torch.device) -> dict[str, Tens
 
 
 def _binary_loss(probability: Tensor, target: Tensor, mask: Tensor) -> Tensor:
-    values = F.binary_cross_entropy(probability.clamp(1e-5, 1 - 1e-5), target.float(), reduction="none")
+    values = F.binary_cross_entropy(
+        probability.clamp(1e-5, 1 - 1e-5), target.float(), reduction="none"
+    )
     return masked_mean(values, mask)
 
 
@@ -93,14 +95,16 @@ def _aligned_observations(
         1,
         safe_assignment.unsqueeze(-1).expand(-1, -1, feature_dim),
     )
-    scores = torch.gather(
-        batch["detection_scores"][:, time_index], 1, safe_assignment
-    )
-    detection_is_valid = torch.gather(
-        batch["detection_valid"][:, time_index], 1, safe_assignment
-    )
+    scores = torch.gather(batch["detection_scores"][:, time_index], 1, safe_assignment)
+    detection_is_valid = torch.gather(batch["detection_valid"][:, time_index], 1, safe_assignment)
     observed = (assignment >= 0) & detection_is_valid & batch["slot_valid"]
     return boxes, features, scores, observed
+
+
+def _delta_time(batch: dict[str, Tensor], time_index: int) -> Tensor:
+    if "delta_time" not in batch:
+        return batch["boxes"].new_ones(batch["boxes"].shape[0])
+    return batch["delta_time"][:, time_index]
 
 
 def _counterfactual_loss(
@@ -110,8 +114,8 @@ def _counterfactual_loss(
     time_index: int,
     margin: float,
 ) -> Tensor:
-    observation_boxes, observation_features, observation_scores, observed = (
-        _aligned_observations(batch, time_index)
+    observation_boxes, observation_features, observation_scores, observed = _aligned_observations(
+        batch, time_index
     )
     negative_observed = observed & observed.roll(1, dims=1)
     if not bool(negative_observed.any()):
@@ -130,8 +134,14 @@ def _counterfactual_loss(
         observation_scores.roll(1, dims=1),
         negative_observed,
     )
-    positive_future = system.predict(positive).state.boxes
-    negative_future = system.predict(negative).state.boxes
+    next_delta_time = _delta_time(batch, time_index + 1)
+    next_camera = batch["camera_motion"][:, time_index + 1]
+    positive_future = system.predict(
+        positive, camera_motion=next_camera, delta_time=next_delta_time
+    ).state.boxes
+    negative_future = system.predict(
+        negative, camera_motion=next_camera, delta_time=next_delta_time
+    ).state.boxes
     target = batch["boxes"][:, time_index + 1]
     target_mask = batch["existence"][:, time_index + 1] & batch["slot_valid"]
     positive_error = masked_mean((positive_future - target).abs(), target_mask)
@@ -150,6 +160,13 @@ def sequence_objective(
     boxes = batch["boxes"]
     _, sequence_length, num_tracks, _ = boxes.shape
     initial_boxes, initial_features, _, initial_observed = _aligned_observations(batch, 0)
+    # GT-first clip construction deliberately retains identities missed by the
+    # detector at t=0. Use the GT state as a teacher-forced motion initializer,
+    # but never leak a future appearance embedding into an unobserved slot.
+    initial_boxes = torch.where(initial_observed.unsqueeze(-1), initial_boxes, boxes[:, 0])
+    initial_features = torch.where(
+        initial_observed.unsqueeze(-1), initial_features, torch.zeros_like(initial_features)
+    )
     state = system.initialize_state(initial_boxes, initial_features, batch["slot_valid"])
     state.existence = batch["existence"][:, 0].float()
     target_appearance = system.project_appearance(batch["appearance"])
@@ -160,7 +177,11 @@ def sequence_objective(
     jepa_rollout_steps = 0
 
     for time_index in range(1, sequence_length):
-        prediction = system.predict(state, camera_motion=batch["camera_motion"][:, time_index])
+        prediction = system.predict(
+            state,
+            camera_motion=batch["camera_motion"][:, time_index],
+            delta_time=_delta_time(batch, time_index),
+        )
         target_exists = batch["existence"][:, time_index]
         target_visible = batch["visibility"][:, time_index]
         target_mask = target_exists & batch["slot_valid"]
@@ -197,16 +218,12 @@ def sequence_objective(
             detection_valid,
         )
         num_detections = association_logits.shape[-1]
-        association_target = boxes.new_zeros(
-            boxes.shape[0], num_tracks, num_detections
-        )
+        association_target = boxes.new_zeros(boxes.shape[0], num_tracks, num_detections)
         safe_assignment = batch["assignment"][:, time_index].clamp_min(0)
         association_target.scatter_(2, safe_assignment.unsqueeze(-1), 1.0)
         association_target *= observed.unsqueeze(-1)
         valid_pairs = batch["slot_valid"].unsqueeze(-1) & detection_valid.unsqueeze(1)
-        metrics["association"] += sinkhorn_loss(
-            association_logits, association_target, valid_pairs
-        )
+        metrics["association"] += sinkhorn_loss(association_logits, association_target, valid_pairs)
 
         correction_observed = observed
         if system.training and config.train.object_mask_ratio > 0:
@@ -214,7 +231,9 @@ def sequence_objective(
                 torch.rand_like(observation_scores) < config.train.object_mask_ratio
             )
             correction_observed = observed & ~masked_objects
-            metrics["object_mask_rate"] += masked_objects.float().sum() / observed.float().sum().clamp_min(1)
+            metrics["object_mask_rate"] += (
+                masked_objects.float().sum() / observed.float().sum().clamp_min(1)
+            )
 
         corrected = system.correct(
             prediction.state,
@@ -232,7 +251,10 @@ def sequence_objective(
         squared_error = (prediction.expected_boxes - boxes[:, time_index]).square().mean(dim=-1)
         predicted_variance = prediction.uncertainty / 4.0
         metrics["uncertainty"] += masked_mean(
-            (predicted_variance.clamp_min(1e-8).log() - squared_error.detach().clamp_min(1e-8).log()).abs(),
+            (
+                predicted_variance.clamp_min(1e-8).log()
+                - squared_error.detach().clamp_min(1e-8).log()
+            ).abs(),
             target_mask,
         )
         iou = box_iou_aligned(prediction.expected_boxes, boxes[:, time_index])
@@ -261,19 +283,18 @@ def sequence_objective(
             future_prediction = system.predict(
                 corrected,
                 camera_motion=batch["camera_motion"][:, time_index + 1],
+                delta_time=_delta_time(batch, time_index + 1),
             )
             future = future_prediction.expected_boxes
             future_mask = batch["existence"][:, time_index + 1] & batch["slot_valid"]
             metrics["rollout"] += masked_mean(
                 (future - boxes[:, time_index + 1]).abs(), future_mask
             )
-            if (
-                future_prediction.latent_prediction is not None
-                and time_index + 2 < sequence_length
-            ):
+            if future_prediction.latent_prediction is not None and time_index + 2 < sequence_length:
                 second_future = system.predict(
                     future_prediction.state,
                     camera_motion=batch["camera_motion"][:, time_index + 2],
+                    delta_time=_delta_time(batch, time_index + 2),
                 )
                 _, rollout_features, _, rollout_observed = _aligned_observations(
                     batch, time_index + 2

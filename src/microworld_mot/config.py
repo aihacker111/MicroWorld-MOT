@@ -35,6 +35,11 @@ class DataConfig:
     val_samples: int = 256
     observation_dropout: float = 0.20
     box_noise: float = 0.01
+    temporal_dropout: float = 0.0
+    temporal_dropout_max_span: int = 4
+    false_positive_ratio: float = 0.0
+    score_noise: float = 0.0
+    shuffle_detections: bool = True
     num_workers: int = 0
     balance_datasets: bool = True
 
