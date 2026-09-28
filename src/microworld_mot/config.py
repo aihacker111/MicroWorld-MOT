@@ -42,6 +42,12 @@ class DataConfig:
     shuffle_detections: bool = True
     num_workers: int = 0
     balance_datasets: bool = True
+    raw_format: str = "mot"
+    image_size: int = 640
+    stride: int = 4
+    temporal_intervals: list[int] = field(default_factory=lambda: [1, 2])
+    min_track_frames: int = 2
+    gt_classes: list[int] = field(default_factory=lambda: [1])
 
 
 @dataclass
@@ -59,6 +65,24 @@ class TrainConfig:
     counterfactual_warmup_epochs: int = 5
     object_mask_ratio: float = 0.35
     target_ema_decay: float = 0.996
+    gradient_accumulation: int = 1
+    detach_interval: int = 4
+
+
+@dataclass
+class JointConfig:
+    enabled: bool = False
+    detector_weights: str = "yolo11n.pt"
+    detector_backbone_lr: float = 1e-5
+    detector_head_lr: float = 5e-5
+    perception_lr: float = 1e-4
+    world_lr: float = 3e-4
+    detector_loss_weight: float = 1.0
+    world_loss_weight: float = 1.0
+    association_temperature: float = 0.10
+    sinkhorn_iterations: int = 8
+    roi_size: int = 3
+    world_prior_strength: float = 0.10
 
 
 @dataclass
@@ -97,6 +121,7 @@ class ExperimentConfig:
     train: TrainConfig = field(default_factory=TrainConfig)
     loss: LossConfig = field(default_factory=LossConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
+    joint: JointConfig = field(default_factory=JointConfig)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -109,6 +134,7 @@ def config_from_dict(data: dict[str, Any]) -> ExperimentConfig:
         train=TrainConfig(**data.get("train", {})),
         loss=LossConfig(**data.get("loss", {})),
         tracker=TrackerConfig(**data.get("tracker", {})),
+        joint=JointConfig(**data.get("joint", {})),
     )
 
 

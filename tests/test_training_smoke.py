@@ -4,7 +4,17 @@ from torch.utils.data import DataLoader
 from microworld_mot.config import ExperimentConfig, ModelConfig
 from microworld_mot.data import SyntheticMOTDataset
 from microworld_mot.models import build_system
-from microworld_mot.training.engine import sequence_objective
+from microworld_mot.training.engine import _binary_loss, sequence_objective
+
+
+def test_probability_bce_is_computed_in_float32() -> None:
+    probability = torch.tensor([[0.01, 0.99]], dtype=torch.float16, requires_grad=True)
+    target = torch.tensor([[0, 1]], dtype=torch.bool)
+    loss = _binary_loss(probability, target, torch.ones_like(target))
+    assert loss.dtype == torch.float32
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert probability.grad is not None
 
 
 def test_single_run_objective_backward() -> None:
@@ -44,8 +54,7 @@ def test_single_run_objective_backward() -> None:
         for parameter in system.world_model.latent_prediction_head.parameters()
     )
     assert all(
-        parameter.grad is None
-        for parameter in system.target_observation_projection.parameters()
+        parameter.grad is None for parameter in system.target_observation_projection.parameters()
     )
 
 

@@ -34,9 +34,10 @@ predicted beliefs -> association -> correction
                          +-> counterfactual future rollout
 ```
 
-It predicts object states, not pixels. The detector is intentionally outside
-the trainable checkpoint so COCO-pretrained or task-specific detectors can be
-changed without retraining the world-model interface.
+It predicts object states, not pixels. Two explicit protocols are supported:
+the reproducible cached-feature protocol keeps the detector outside the
+trainable checkpoint, while the raw-frame joint protocol fine-tunes YOLO11,
+ROI appearance, association and the world model in one optimizer from epoch 1.
 
 ## Implemented components
 
@@ -53,7 +54,9 @@ changed without retraining the world-model interface.
 - Online lifecycle management and uncertainty-driven detector scheduling.
 - Real detector caching for MOT16, MOT17, DanceTrack and VisDrone.
 - Independent detection slots, false positives and GT assignment targets.
-- Frozen YOLO11n COCO detector and native YOLO11 crop embeddings.
+- Frozen YOLO11n cache protocol and a separate end-to-end YOLO11 joint protocol.
+- Differentiable FPN ROI features and causal world-prior injection before the
+  YOLO11 detection head.
 - EMA target encoder and masked future-object latent prediction.
 - Two-step open-loop Object-JEPA rollout objective.
 - Single-run training, evaluation, parameter/GFLOP profiling and tests.
@@ -124,6 +127,41 @@ outputs/microworld_jepa_tiny/config.json
 AMP is enabled only on CUDA. Reduce `train.batch_size`, `data.max_tracks` or
 `data.sequence_length` if one-GPU memory is insufficient.
 
+## Joint YOLO11 + world-model training (one GPU)
+
+This is the no-stage configuration: every trainable YOLO11, ROI adapter,
+association, correction and world-model parameter is active from the first
+optimizer update. It reads the raw DanceTrack images and annotations directly,
+so `prepare_real_data.py` and detector caches are not used:
+
+```bash
+cd /media/hung/HDD/workplaces/tin/cvpr2027/MicroWorld-MOT
+python tools/train.py --config configs/dancetrack_joint_tiny.json
+```
+
+If the dataset lives elsewhere, override all roots without editing the JSON:
+
+```bash
+python tools/train.py \
+  --config configs/dancetrack_joint_tiny.json \
+  --set 'data.train_paths=["/home/hung/Datasets/DanceTrack/train1","/home/hung/Datasets/DanceTrack/train2"]' \
+  --set 'data.val_paths=["/home/hung/Datasets/DanceTrack/val"]'
+```
+
+The single-GPU default uses batch size 1, four-frame unrolling, AMP, truncated
+backpropagation every two frames and four-step gradient accumulation. If CUDA
+runs out of memory, first set `data.image_size=512`; do not freeze YOLO or add
+an epoch-stage schedule. The checkpoint contains both `model` (world/tracker)
+and `joint_perception` (YOLO11, ROI projections and prior gates).
+
+During training, public GT boxes define positive ROI proposals and association
+labels, while the official YOLO detection objective trains the detector on the
+same frames. This avoids putting hard NMS or Hungarian matching in the gradient
+path. At inference, decoded YOLO detections replace those supervised proposals.
+The validation selector is `val_world`/`world_loss`; final paper results must be
+reported with the normal MOTChallenge evaluator (HOTA, DetA, AssA, IDF1 and
+MOTA), not this optimization loss.
+
 ## Pretrained perception
 
 The turnkey real-data pipeline uses one official Ultralytics checkpoint:
@@ -134,11 +172,11 @@ appearance:        YOLO11n penultimate-layer crop embedding
 feature size:      256 -> trainable projection -> 32
 ```
 
-YOLO11n is frozen and Ultralytics downloads `yolo11n.pt` on the first cache
-run. The same checkpoint performs detection and embeds each detected crop, so
-there is no MobileNet or separate ReID backbone. The MicroWorld checkpoint
-contains only the trainable 256-to-32 projection and tracker/world-model
-components.
+In the cached protocol, YOLO11n is frozen and Ultralytics downloads
+`yolo11n.pt` on the first cache run. In the joint protocol, that checkpoint is
+only the initialization: its backbone and head remain trainable for every
+epoch, using lower learning rates than the new world-model layers. Neither
+protocol uses MobileNet or a separate ReID backbone.
 
 Ultralytics offers AGPL-3.0 and Enterprise licensing. Check which license is
 appropriate before distributing a combined application or commercial model.

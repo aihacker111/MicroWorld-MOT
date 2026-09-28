@@ -44,9 +44,16 @@ def _to_device(batch: dict[str, Tensor], device: torch.device) -> dict[str, Tens
 
 
 def _binary_loss(probability: Tensor, target: Tensor, mask: Tensor) -> Tensor:
-    values = F.binary_cross_entropy(
-        probability.clamp(1e-5, 1 - 1e-5), target.float(), reduction="none"
-    )
+    # PyTorch deliberately rejects probability-space BCE under CUDA autocast:
+    # its FP16 backward can overflow close to 0/1. These model heads already
+    # return probabilities, so keep their public contract and evaluate BCE in
+    # FP32 outside autocast instead of applying a sigmoid twice.
+    with torch.autocast(device_type=probability.device.type, enabled=False):
+        values = F.binary_cross_entropy(
+            probability.float().clamp(1e-5, 1 - 1e-5),
+            target.float(),
+            reduction="none",
+        )
     return masked_mean(values, mask)
 
 

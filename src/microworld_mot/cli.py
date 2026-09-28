@@ -8,10 +8,12 @@ import torch
 from torch.utils.data import DataLoader
 
 from .config import config_from_dict, load_config
-from .data import build_datasets
+from .data import build_datasets, build_raw_datasets
 from .models import build_system
 from .models.registry import resolved_config
+from .perception import JointYOLO11
 from .training.engine import evaluate_epoch, resolve_device, train
+from .training.joint_engine import evaluate_joint_epoch, train_joint
 
 
 def _parse_value(value: str) -> Any:
@@ -50,21 +52,26 @@ def train_main() -> None:
     args = parser.parse_args()
     config = load_config(args.config)
     _apply_overrides(config, args.set)
-    checkpoint = train(config)
+    checkpoint = train_joint(config) if config.joint.enabled else train(config)
     print(f"best_checkpoint={checkpoint.resolve()}")
 
 
 def evaluate_main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate a MicroWorld-MOT checkpoint")
     parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--config", default="", help="Optional config override; checkpoint config is default.")
+    parser.add_argument(
+        "--config", default="", help="Optional config override; checkpoint config is default."
+    )
     parser.add_argument("--device", default="auto")
     args = parser.parse_args()
     device = resolve_device(args.device)
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     config = load_config(args.config) if args.config else config_from_dict(checkpoint["config"])
     config.model = resolved_config(config.model)
-    _, validation = build_datasets(config.data, config.model, config.train.seed)
+    if config.joint.enabled:
+        _, validation = build_raw_datasets(config.data, config.train.seed)
+    else:
+        _, validation = build_datasets(config.data, config.model, config.train.seed)
     loader = DataLoader(
         validation,
         batch_size=config.train.batch_size,
@@ -73,10 +80,21 @@ def evaluate_main() -> None:
     )
     system = build_system(config.model).to(device)
     system.load_state_dict(checkpoint["model"])
-    metrics = evaluate_epoch(system, loader, config, device, int(checkpoint["epoch"]))
+    if config.joint.enabled:
+        perception = JointYOLO11(
+            config.joint.detector_weights,
+            config.model.observation_dim,
+            config.joint.roi_size,
+            config.joint.world_prior_strength,
+        ).to(device)
+        perception.load_state_dict(checkpoint["joint_perception"])
+        metrics = evaluate_joint_epoch(
+            system, perception, loader, config, device, int(checkpoint["epoch"])
+        )
+    else:
+        metrics = evaluate_epoch(system, loader, config, device, int(checkpoint["epoch"]))
     print(json.dumps(metrics, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
     train_main()
-
