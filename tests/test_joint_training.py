@@ -27,6 +27,8 @@ class _FakeDetect(nn.Module):
 class _FakeDetectionModel(nn.Module):
     def __init__(self, channels: int = 8) -> None:
         super().__init__()
+        self.args = {"box": 7.5, "cls": 0.5, "dfl": 1.5}
+        self.criterion = object()
         self.model = nn.ModuleList(
             [nn.Conv2d(3, channels, 3, padding=1), _FakeDetect(channels)]
         )
@@ -75,6 +77,8 @@ def test_joint_yolo_bridge_backpropagates_through_prior_and_rois() -> None:
         detector_model=detector,
         feature_channels=[8],
     )
+    assert bridge.detector.args.box == 7.5
+    assert bridge.detector.criterion is None
     bridge.set_world_prior(_prediction(1, 2))
     images = torch.rand(1, 3, 16, 16)
     targets = {

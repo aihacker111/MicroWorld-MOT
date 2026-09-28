@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import torch
@@ -14,6 +15,30 @@ def _first_conv_in_channels(module: nn.Module) -> int:
         if isinstance(child, nn.Conv2d):
             return child.in_channels
     raise RuntimeError("Could not infer YOLO detection feature channels")
+
+
+def _normalize_training_args(detector: nn.Module) -> None:
+    """Match the argument contract installed by Ultralytics' normal Trainer.
+
+    Loading ``YOLO(...).model`` directly leaves ``DetectionModel.args`` as a
+    dictionary in some Ultralytics releases. Its loss implementation expects
+    attribute access (for example ``args.box``), because the standard Trainer
+    replaces that dictionary with an IterableSimpleNamespace before training.
+    """
+    args = getattr(detector, "args", None)
+    if not isinstance(args, dict):
+        return
+    try:
+        from ultralytics.cfg import get_cfg
+    except ImportError:
+        # Supports injected detector doubles in the dependency-free test suite.
+        detector.args = SimpleNamespace(**args)
+    else:
+        detector.args = get_cfg(args)
+    # A criterion captures detector.args at construction, so force a rebuild if
+    # a caller supplied a model on which loss had already been invoked.
+    if hasattr(detector, "criterion"):
+        detector.criterion = None
 
 
 class JointYOLO11(nn.Module):
@@ -46,6 +71,7 @@ class JointYOLO11(nn.Module):
             detector_model = YOLO(weights).model
         self.detector = detector_model
         self.weights = weights
+        _normalize_training_args(self.detector)
         if not hasattr(self.detector, "model") or not len(self.detector.model):
             raise TypeError("Expected an Ultralytics DetectionModel-compatible module")
         self.detect_head = self.detector.model[-1]
