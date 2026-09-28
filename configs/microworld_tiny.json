@@ -1,0 +1,68 @@
+{
+  "model": {
+    "name": "microworld_jepa_tiny",
+    "latent_dim": 64,
+    "observation_dim": 64,
+    "appearance_dim": 32,
+    "graph_hidden_dim": 96,
+    "graph_layers": 2,
+    "num_neighbors": 6,
+    "motion_modes": 3,
+    "rollout_horizon": 3,
+    "max_hypotheses": 4,
+    "camera_dim": 6,
+    "dropout": 0.05
+  },
+  "data": {
+    "kind": "synthetic",
+    "path": "",
+    "sequence_length": 16,
+    "max_tracks": 12,
+    "max_detections": 20,
+    "train_samples": 2048,
+    "val_samples": 256,
+    "observation_dropout": 0.2,
+    "box_noise": 0.01,
+    "num_workers": 0
+  },
+  "train": {
+    "epochs": 40,
+    "batch_size": 16,
+    "learning_rate": 0.0003,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "seed": 7,
+    "device": "auto",
+    "amp": true,
+    "output_dir": "outputs/microworld_jepa_tiny",
+    "resume": "",
+    "counterfactual_warmup_epochs": 5,
+    "object_mask_ratio": 0.35,
+    "target_ema_decay": 0.996
+  },
+  "loss": {
+    "state": 1.0,
+    "rollout": 0.5,
+    "association": 1.0,
+    "counterfactual": 0.5,
+    "identity": 0.25,
+    "existence": 0.25,
+    "occlusion": 0.25,
+    "uncertainty": 0.1,
+    "refresh": 0.1,
+    "object_jepa": 0.5,
+    "object_jepa_rollout": 0.25,
+    "counterfactual_margin": 0.05
+  },
+  "tracker": {
+    "association_threshold": 2.5,
+    "ambiguity_margin": 0.25,
+    "birth_threshold": 0.35,
+    "existence_threshold": 0.2,
+    "confirmation_hits": 2,
+    "max_age": 30,
+    "max_detector_gap": 4,
+    "refresh_threshold": 0.55,
+    "use_counterfactual": true
+  }
+}

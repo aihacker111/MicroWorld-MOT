@@ -1,0 +1,81 @@
+{
+  "model": {
+    "name": "microworld_jepa_tiny",
+    "latent_dim": 64,
+    "observation_dim": 256,
+    "appearance_dim": 32,
+    "graph_hidden_dim": 96,
+    "graph_layers": 2,
+    "num_neighbors": 6,
+    "motion_modes": 3,
+    "rollout_horizon": 3,
+    "max_hypotheses": 4,
+    "camera_dim": 6,
+    "dropout": 0.05
+  },
+  "data": {
+    "kind": "cached",
+    "path": "",
+    "train_paths": [
+      "data/clips/dancetrack/train",
+      "data/clips/mot17/train",
+      "data/clips/mot16/train",
+      "data/clips/visdrone/train"
+    ],
+    "val_paths": [
+      "data/clips/dancetrack/val",
+      "data/clips/mot17/val",
+      "data/clips/mot16/val",
+      "data/clips/visdrone/val"
+    ],
+    "sequence_length": 16,
+    "max_tracks": 64,
+    "max_detections": 128,
+    "train_samples": 0,
+    "val_samples": 0,
+    "observation_dropout": 0.1,
+    "box_noise": 0.002,
+    "num_workers": 4,
+    "balance_datasets": true
+  },
+  "train": {
+    "epochs": 60,
+    "batch_size": 2,
+    "learning_rate": 0.0003,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "seed": 7,
+    "device": "cuda:0",
+    "amp": true,
+    "output_dir": "outputs/real_multidataset_tiny",
+    "resume": "",
+    "counterfactual_warmup_epochs": 5,
+    "object_mask_ratio": 0.35,
+    "target_ema_decay": 0.996
+  },
+  "loss": {
+    "state": 1.0,
+    "rollout": 0.5,
+    "association": 1.0,
+    "counterfactual": 0.5,
+    "identity": 0.25,
+    "existence": 0.25,
+    "occlusion": 0.25,
+    "uncertainty": 0.1,
+    "refresh": 0.1,
+    "object_jepa": 0.5,
+    "object_jepa_rollout": 0.25,
+    "counterfactual_margin": 0.05
+  },
+  "tracker": {
+    "association_threshold": 2.5,
+    "ambiguity_margin": 0.25,
+    "birth_threshold": 0.35,
+    "existence_threshold": 0.2,
+    "confirmation_hits": 2,
+    "max_age": 30,
+    "max_detector_gap": 4,
+    "refresh_threshold": 0.55,
+    "use_counterfactual": true
+  }
+}
