@@ -176,6 +176,9 @@ The converter supports `dancetrack`, `mot16`, `mot17` and `visdrone`. Its JSON
 keeps standard COCO fields plus `videos`, `video_id`, `frame_id`, `track_id`,
 visibility and VisDrone occlusion/truncation. Use `--category-mode person` to
 map DanceTrack/MOT pedestrians and VisDrone pedestrian/people into one class.
+For DanceTrack, `--splits train` automatically combines the official `train1`
+and `train2` directories into one `dancetrack_train.json`; image and annotation
+IDs remain globally unique.
 MOT17 is deduplicated to its FRCNN copy by default; use
 `--keep-mot17-duplicates` only when the detector-specific copies are genuinely
 needed. Test splits without public GT produce image/video metadata and an empty

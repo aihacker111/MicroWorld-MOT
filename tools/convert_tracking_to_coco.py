@@ -111,7 +111,7 @@ def _parse_seqinfo(sequence_dir: Path, images: list[Path]) -> tuple[int, int, fl
     return width, height, 30.0, None
 
 
-def _belongs_to_split(sequence_dir: Path, root: Path, split: str) -> bool:
+def _belongs_to_split(sequence_dir: Path, root: Path, split: str, dataset: str) -> bool:
     split = split.lower()
     if root.name.lower() == split:
         return True
@@ -119,17 +119,23 @@ def _belongs_to_split(sequence_dir: Path, root: Path, split: str) -> bool:
         parts = [part.lower() for part in sequence_dir.relative_to(root).parts]
     except ValueError:
         parts = [part.lower() for part in sequence_dir.parts]
-    return split in parts
+    if split in parts:
+        return True
+    return (
+        dataset == "dancetrack"
+        and split == "train"
+        and any(re.fullmatch(r"train\d+", part) for part in parts)
+    )
 
 
-def _mot_sequence_dirs(root: Path, split: str) -> list[Path]:
+def _mot_sequence_dirs(root: Path, split: str, dataset: str) -> list[Path]:
     candidates: set[Path] = set()
     if (root / "img1").is_dir():
         candidates.add(root)
     for image_dir in root.rglob("img1"):
         if image_dir.is_dir():
             candidates.add(image_dir.parent)
-    selected = [path for path in candidates if _belongs_to_split(path, root, split)]
+    selected = [path for path in candidates if _belongs_to_split(path, root, split, dataset)]
     return sorted(selected, key=lambda path: path.as_posix().lower())
 
 
@@ -155,7 +161,7 @@ def _mot_sequences(
     mot17_detector: str,
     keep_mot17_duplicates: bool,
 ) -> list[SequenceInfo]:
-    directories = _mot_sequence_dirs(root, split)
+    directories = _mot_sequence_dirs(root, split, dataset)
     if dataset == "mot17" and not keep_mot17_duplicates:
         directories = _deduplicate_mot17(directories, mot17_detector)
 

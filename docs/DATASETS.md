@@ -39,7 +39,8 @@ or a space-separated combination.
 ## COCO conversion
 
 The converter accepts either a dataset-wide root or a split root and discovers
-the official nested layout automatically:
+the official nested layout automatically. DanceTrack `train1` and `train2` are
+both selected by `--splits train` and written into one COCO JSON:
 
 ```bash
 python tools/convert_tracking_to_coco.py \

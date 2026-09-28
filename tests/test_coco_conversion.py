@@ -11,8 +11,8 @@ def _write_image(path: Path, size: tuple[int, int] = (100, 80)) -> None:
     Image.new("RGB", size, color=(10, 20, 30)).save(path)
 
 
-def _write_mot_sequence(root: Path, name: str, rows: list[str]) -> None:
-    sequence = root / "train" / name
+def _write_mot_sequence(root: Path, name: str, rows: list[str], split: str = "train") -> None:
+    sequence = root / split / name
     _write_image(sequence / "img1" / "000001.jpg")
     (sequence / "gt").mkdir(parents=True)
     (sequence / "gt" / "gt.txt").write_text("\n".join(rows) + "\n", encoding="utf-8")
@@ -97,3 +97,20 @@ def test_cli_writes_compact_json(tmp_path: Path, monkeypatch) -> None:
     converted = json.loads((output / "dancetrack_train.json").read_text(encoding="utf-8"))
     assert converted["images"][0]["frame_id"] == 1
     assert converted["annotations"][0]["track_id"] == 3
+
+
+def test_dancetrack_train_combines_train1_and_train2(tmp_path: Path) -> None:
+    rows = ["1,3,1,2,10,12,1,1,1"]
+    _write_mot_sequence(tmp_path, "dancetrack0001", rows, split="train1")
+    _write_mot_sequence(tmp_path, "dancetrack0050", rows, split="train2")
+
+    coco = convert_split("dancetrack", tmp_path, "train", category_mode="person")
+
+    assert [video["name"] for video in coco["videos"]] == [
+        "dancetrack0001",
+        "dancetrack0050",
+    ]
+    assert len(coco["images"]) == 2
+    assert len(coco["annotations"]) == 2
+    assert len({image["id"] for image in coco["images"]}) == 2
+    assert len({annotation["id"] for annotation in coco["annotations"]}) == 2
